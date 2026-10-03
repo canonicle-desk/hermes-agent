@@ -1008,6 +1008,8 @@ class GatewayAdapterLifecycleMixin:
             if owns_host_lock(ROLE_GATEWAY):
                 from hermes_constants import get_hermes_home
                 publish_record(ROLE_GATEWAY, profiles=tuple(served), home=str(get_hermes_home()))
+        # Primary clients connect before secondary plugin discovery; routed factories can bind now.
+        self._rewire_plugin_handlers()
 
     async def _load_secondary_profile_config(self, profile_name: str, profile_home: "Path"):
         """Hydrate + enter ``profile_home``'s scope once; return its gateway config. Raises
