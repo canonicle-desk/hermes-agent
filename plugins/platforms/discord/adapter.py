@@ -1048,9 +1048,10 @@ def _read_discord_prompt_timeout() -> int:
 
 
 from plugins.platforms.discord.adapter_media import DiscordMediaMixin
+from plugins.platforms.discord.adapter_command_sync import DiscordCommandSyncMixin
 
 
-class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
+class DiscordAdapter(DiscordCommandSyncMixin, DiscordMediaMixin, BasePlatformAdapter):
     """Discord bot adapter: guild/DM messages, threads, slash commands, button approvals, reactions."""
 
     MAX_MESSAGE_LENGTH = 2000
@@ -2816,157 +2817,6 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 raw,
             )
         return "safe"
-
-    def _canonicalize_app_command_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Reduce command payloads to the semantic fields Hermes manages."""
-        contexts = payload.get("contexts")
-        integration_types = payload.get("integration_types")
-        return {
-            "type": int(payload.get("type", 1) or 1),
-            "name": str(payload.get("name", "") or ""),
-            "description": str(payload.get("description", "") or ""),
-            "default_member_permissions": self._normalize_permissions(
-                payload.get("default_member_permissions")
-            ),
-            "dm_permission": bool(payload.get("dm_permission", True)),
-            "nsfw": bool(payload.get("nsfw", False)),
-            "contexts": sorted(int(c) for c in contexts) if contexts else None,
-            "integration_types": (
-                sorted(int(i) for i in integration_types) if integration_types else None
-            ),
-            "options": [
-                self._canonicalize_app_command_option(item)
-                for item in payload.get("options", []) or []
-                if isinstance(item, dict)
-            ],
-        }
-
-    @staticmethod
-    def _normalize_permissions(value: Any) -> Optional[str]:
-        """Normalize default_member_permissions to str-or-None (Discord returns str, discord.py sets int)."""
-        if value is None:
-            return None
-        return str(value)
-
-    def _existing_command_to_payload(self, command: Any) -> Dict[str, Any]:
-        """Build a canonical-ready dict from an AppCommand; ``to_dict()`` omits nsfw/dm_permission/
-        default_member_permissions, so pull them from attributes or every startup diffs."""
-        payload = dict(command.to_dict())
-        nsfw = getattr(command, "nsfw", None)
-        if nsfw is not None:
-            payload["nsfw"] = bool(nsfw)
-        guild_only = getattr(command, "guild_only", None)
-        if guild_only is not None:
-            payload["dm_permission"] = not bool(guild_only)
-        default_permissions = getattr(command, "default_member_permissions", None)
-        if default_permissions is not None:
-            payload["default_member_permissions"] = getattr(
-                default_permissions, "value", default_permissions
-            )
-        return payload
-
-    def _canonicalize_app_command_option(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "type": int(payload.get("type", 0) or 0),
-            "name": str(payload.get("name", "") or ""),
-            "description": str(payload.get("description", "") or ""),
-            "required": bool(payload.get("required", False)),
-            "autocomplete": bool(payload.get("autocomplete", False)),
-            "choices": [
-                {
-                    "name": str(choice.get("name", "") or ""), "value": choice.get("value"),
-                }
-                for choice in payload.get("choices", []) or []
-                if isinstance(choice, dict)
-            ],
-            "channel_types": list(payload.get("channel_types", []) or []),
-            "min_value": payload.get("min_value"),
-            "max_value": payload.get("max_value"),
-            "min_length": payload.get("min_length"),
-            "max_length": payload.get("max_length"),
-            "options": [
-                self._canonicalize_app_command_option(item)
-                for item in payload.get("options", []) or []
-                if isinstance(item, dict)
-            ],
-        }
-
-    def _patchable_app_command_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Fields supported by discord.py's edit_global_command route."""
-        canonical = self._canonicalize_app_command_payload(payload)
-        return {
-            "name": canonical["name"], "description": canonical["description"],
-            "options": canonical["options"],
-        }
-
-    async def _safe_sync_slash_commands(self) -> Dict[str, int]:
-        """Diff existing global commands and only mutate the commands that changed."""
-        summary = {"total": 0, "unchanged": 0, "updated": 0, "recreated": 0, "created": 0, "deleted": 0}
-        if not self._client:
-            return summary
-        tree = self._client.tree
-        app_id = getattr(self._client, "application_id", None) or getattr(getattr(self._client, "user", None), "id", None)
-        if not app_id:
-            raise RuntimeError("Discord application ID is unavailable for slash command sync")
-        desired_payloads = [command.to_dict(tree) for command in tree.get_commands()]
-        desired_by_key = {
-            (int(payload.get("type", 1) or 1), str(payload.get("name", "") or "").lower()): payload
-            for payload in desired_payloads
-        }
-        existing_commands = await tree.fetch_commands()
-        existing_by_key = {
-            (
-                int(getattr(getattr(command, "type", None), "value", getattr(command, "type", 1)) or 1),
-                str(command.name or "").lower(),
-            ): command
-            for command in existing_commands
-        }
-        http = self._client.http
-        mutation_count = 0
-
-        async def mutate(call, *args):
-            nonlocal mutation_count
-            if mutation_count:
-                await self._sleep_between_command_sync_mutations()
-            result = await call(*args)
-            mutation_count += 1
-            return result
-        # Delete obsolete commands FIRST: an upsert pushing the live total over 100 fails with
-        # 30032 (breaks ALL slash commands), so an app at the cap must shrink before creating.
-        obsolete_keys = set(existing_by_key.keys()) - set(desired_by_key.keys())
-        for key in obsolete_keys:
-            current = existing_by_key.pop(key)
-            await mutate(http.delete_global_command, app_id, current.id)
-            summary["deleted"] += 1
-        for key, desired in desired_by_key.items():
-            current = existing_by_key.pop(key, None)
-            if current is None:
-                await mutate(http.upsert_global_command, app_id, desired)
-                summary["created"] += 1
-                continue
-            current_existing_payload = self._existing_command_to_payload(current)
-            current_payload = self._canonicalize_app_command_payload(current_existing_payload)
-            desired_payload = self._canonicalize_app_command_payload(desired)
-            if current_payload == desired_payload:
-                summary["unchanged"] += 1
-                continue
-            if self._patchable_app_command_payload(current_existing_payload) == self._patchable_app_command_payload(desired):
-                # Upsert alone recreates the command: Discord's create endpoint
-                # overwrites the existing same-name command ("Returns 201 if a
-                # command with the same name does not already exist, or a 200
-                # if it does"). Delete-first strands the command deleted when
-                # the small command-management bucket 429s the upsert mid-sync;
-                # upsert-first keeps the command available even then. The
-                # obsolete-path delete-first below is different: an upsert
-                # pushing the live total over 100 fails with 30032 (breaks ALL
-                # slash commands), so an app at the cap must shrink first.
-                await mutate(http.upsert_global_command, app_id, desired)
-                summary["recreated"] += 1
-                continue
-            await mutate(http.edit_global_command, app_id, current.id, desired)
-            summary["updated"] += 1
-        summary["total"] = len(desired_payloads)
-        return summary
 
     async def _add_reaction(self, message: Any, emoji: str) -> bool:
         """Add an emoji reaction to a Discord message."""
