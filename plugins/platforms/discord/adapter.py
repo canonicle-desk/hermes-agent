@@ -1049,9 +1049,17 @@ def _read_discord_prompt_timeout() -> int:
 
 from plugins.platforms.discord.adapter_media import DiscordMediaMixin
 from plugins.platforms.discord.adapter_command_sync import DiscordCommandSyncMixin
+from plugins.platforms.discord.adapter_profile_commands import (
+    DiscordProfileCommandsMixin,
+)
 
 
-class DiscordAdapter(DiscordCommandSyncMixin, DiscordMediaMixin, BasePlatformAdapter):
+class DiscordAdapter(
+    DiscordProfileCommandsMixin,
+    DiscordCommandSyncMixin,
+    DiscordMediaMixin,
+    BasePlatformAdapter,
+):
     """Discord bot adapter: guild/DM messages, threads, slash commands, button approvals, reactions."""
 
     MAX_MESSAGE_LENGTH = 2000
@@ -2165,6 +2173,7 @@ class DiscordAdapter(DiscordCommandSyncMixin, DiscordMediaMixin, BasePlatformAda
         if not self._client:
             return
         try:
+            await self._await_served_profile_command_sync()
             sync_policy = self._get_discord_command_sync_policy()
             if sync_policy == "off":
                 logger.info("[%s] Skipping Discord slash command sync (policy=off)", self.name)
@@ -4330,6 +4339,14 @@ class DiscordAdapter(DiscordCommandSyncMixin, DiscordMediaMixin, BasePlatformAda
         if not self._client:
             return
         tree = self._client.tree
+        self._hide_slash_commands = _scoped_gate_env(
+            "DISCORD_HIDE_SLASH_COMMANDS", "false"
+        ).lower() in {
+            "true",
+            "1",
+            "yes",
+            "on",
+        }
         for name, description, args, template, followup in _native_slash_commands():
             if template is None:
                 self._register_thread_slash(tree, name, description)
@@ -4389,6 +4406,7 @@ class DiscordAdapter(DiscordCommandSyncMixin, DiscordMediaMixin, BasePlatformAda
                 _auto_register(plugin_name, plugin_desc, plugin_args_hint)
         except Exception as e:
             logger.warning("Discord auto-register from plugin commands failed: %s", e)
+        dropped_over_cap += self._reapply_stored_profile_plugin_commands(tree)
         self._register_skill_group(tree)
         if dropped_over_cap:
             # One over-limit command makes Discord reject the entire sync (error 30032).
@@ -4402,9 +4420,7 @@ class DiscordAdapter(DiscordCommandSyncMixin, DiscordMediaMixin, BasePlatformAda
                 dropped_over_cap,
             )
         # Opt-in UX only: hide slash commands from non-admins; real gate is _check_slash_authorization.
-        if _scoped_gate_env("DISCORD_HIDE_SLASH_COMMANDS", "false").lower() in {
-            "true", "1", "yes", "on",
-        }:
+        if self._hide_slash_commands:
             self._apply_owner_only_visibility(tree)
 
     def _apply_owner_only_visibility(self, tree) -> None:
