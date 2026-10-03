@@ -38,6 +38,11 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
     from gateway.run import GatewayRunner  # noqa: F401
     from gateway.run_turn_runner import TurnRunner  # noqa: F401
 
+from gateway.run_profile_commands import (
+    merge_served_profile_plugin_commands,
+    restore_served_profile_plugin_commands,
+)
+
 # Log-record parity with the origin module.
 logger = logging.getLogger("gateway.run")
 _UNSET = object()  # "no per-profile human_delay snapshot": fall back to the primary's value
@@ -791,6 +796,7 @@ class GatewayAdapterLifecycleMixin:
                 self._drop_from_reconnect_queue(platform, "adapter creation returned None")
                 return
             carry_inbound_dedup(info.get("inbound_dedup"), adapter)
+            restore_served_profile_plugin_commands(self, adapter)
             self._wire_adapter_handlers(adapter)
             # is_reconnect keeps the server-side update queue so offline-period messages are delivered.
             success = await self._connect_adapter_with_timeout(adapter, platform, is_reconnect=True)
@@ -1028,6 +1034,7 @@ class GatewayAdapterLifecycleMixin:
             profile_runtime_cfg = _load_gateway_config()
             from hermes_cli.plugins import discover_plugins, get_plugin_manager
             discover_plugins()
+            merge_served_profile_plugin_commands(self, profile_name)
             self._subscribe_plugin_rewire(get_plugin_manager(), profile_name, profile_home)
             # This profile's `hooks:` block: start() registered before any profile scope existed.
             self._register_config_hooks(

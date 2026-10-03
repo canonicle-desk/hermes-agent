@@ -2621,7 +2621,9 @@ def _seed_anthropic_singletons(seed: _Seeder) -> None:
     from agent.credential_sources import adopt_external_logins_enabled
 
     sources = [("hermes_pkce", read_hermes_oauth_credentials())]
-    if adopt_external_logins_enabled():
+    if adopt_external_logins_enabled() and not seed.is_suppressed(
+        "anthropic", "claude_code"
+    ):
         sources.append(("claude_code", read_claude_code_credentials()))
     else:
         # Singleton-seeded rows are otherwise never pruned; the opt-out must also drop the row an

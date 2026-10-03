@@ -103,6 +103,7 @@ class FakeBot:
         self._events = {}
         self.tree = FakeTree()
         self.http = SimpleNamespace(
+            get_global_commands=AsyncMock(return_value=[]),
             upsert_global_command=AsyncMock(),
             edit_global_command=AsyncMock(),
             delete_global_command=AsyncMock(),
@@ -365,21 +366,8 @@ async def test_safe_sync_slash_commands_only_mutates_diffs():
             assert tree is not None
             return dict(self._payload)
 
-    class _ExistingCommand:
-        def __init__(self, command_id, payload):
-            self.id = command_id
-            self.name = payload["name"]
-            self.type = SimpleNamespace(value=payload["type"])
-            self._payload = payload
-
-        def to_dict(self):
-            return {
-                "id": self.id,
-                "application_id": 999,
-                **self._payload,
-                "name_localizations": {},
-                "description_localizations": {},
-            }
+    def _existing_command(command_id, payload):
+        return {"id": command_id, "application_id": 999, **payload}
 
     desired_same = {
         "name": "status",
@@ -408,15 +396,15 @@ async def test_safe_sync_slash_commands_only_mutates_diffs():
         "dm_permission": True,
         "default_member_permissions": None,
     }
-    existing_same = _ExistingCommand(11, desired_same)
-    existing_updated = _ExistingCommand(
+    existing_same = _existing_command(11, desired_same)
+    existing_updated = _existing_command(
         12,
         {
             **desired_updated,
             "description": "Old help text",
         },
     )
-    existing_deleted = _ExistingCommand(
+    existing_deleted = _existing_command(
         13,
         {
             "name": "old-command",
@@ -435,9 +423,11 @@ async def test_safe_sync_slash_commands_only_mutates_diffs():
             _DesiredCommand(desired_updated),
             _DesiredCommand(desired_created),
         ],
-        fetch_commands=AsyncMock(return_value=[existing_same, existing_updated, existing_deleted]),
     )
     fake_http = SimpleNamespace(
+        get_global_commands=AsyncMock(
+            return_value=[existing_same, existing_updated, existing_deleted]
+        ),
         upsert_global_command=AsyncMock(),
         edit_global_command=AsyncMock(),
         delete_global_command=AsyncMock(),
@@ -484,21 +474,8 @@ async def test_safe_sync_recreated_upserts_without_delete():
         def to_dict(self, tree):
             return dict(self._payload)
 
-    class _ExistingCommand:
-        def __init__(self, command_id, payload):
-            self.id = command_id
-            self.name = payload["name"]
-            self.type = SimpleNamespace(value=payload["type"])
-            self._payload = payload
-
-        def to_dict(self):
-            return {
-                "id": self.id,
-                "application_id": 999,
-                **self._payload,
-                "name_localizations": {},
-                "description_localizations": {},
-            }
+    def _existing_command(command_id, payload):
+        return {"id": command_id, "application_id": 999, **payload}
 
     desired_model = {
         "name": "model",
@@ -511,16 +488,16 @@ async def test_safe_sync_recreated_upserts_without_delete():
     }
     # Non-patchable field differs from the live command: the safe-sync
     # "recreated" path (patchable payload equal, canonical payload unequal).
-    existing_model = _ExistingCommand(
+    existing_model = _existing_command(
         21,
         {**desired_model, "dm_permission": False},
     )
 
     fake_tree = SimpleNamespace(
         get_commands=lambda: [_DesiredCommand(desired_model)],
-        fetch_commands=AsyncMock(return_value=[existing_model]),
     )
     fake_http = SimpleNamespace(
+        get_global_commands=AsyncMock(return_value=[existing_model]),
         upsert_global_command=AsyncMock(),
         edit_global_command=AsyncMock(),
         delete_global_command=AsyncMock(),
@@ -565,21 +542,8 @@ async def test_safe_sync_recreated_survives_rate_limit_between_mutations():
         def to_dict(self, tree):
             return dict(self._payload)
 
-    class _ExistingCommand:
-        def __init__(self, command_id, payload):
-            self.id = command_id
-            self.name = payload["name"]
-            self.type = SimpleNamespace(value=payload["type"])
-            self._payload = payload
-
-        def to_dict(self):
-            return {
-                "id": self.id,
-                "application_id": 999,
-                **self._payload,
-                "name_localizations": {},
-                "description_localizations": {},
-            }
+    def _existing_command(command_id, payload):
+        return {"id": command_id, "application_id": 999, **payload}
 
     desired_model = {
         "name": "model",
@@ -590,11 +554,10 @@ async def test_safe_sync_recreated_survives_rate_limit_between_mutations():
         "dm_permission": True,
         "default_member_permissions": None,
     }
-    existing_model = _ExistingCommand(21, {**desired_model, "dm_permission": False})
+    existing_model = _existing_command(21, {**desired_model, "dm_permission": False})
 
     fake_tree = SimpleNamespace(
         get_commands=lambda: [_DesiredCommand(desired_model)],
-        fetch_commands=AsyncMock(return_value=[existing_model]),
     )
     calls = []
 
@@ -606,6 +569,7 @@ async def test_safe_sync_recreated_survives_rate_limit_between_mutations():
         calls.append(f"delete:{command_id}")
 
     fake_http = SimpleNamespace(
+        get_global_commands=AsyncMock(return_value=[existing_model]),
         upsert_global_command=_upsert,
         edit_global_command=AsyncMock(),
         delete_global_command=_delete,
@@ -692,12 +656,8 @@ async def test_post_connect_initialization_retries_fingerprint_after_timeout(tmp
 
 
 @pytest.mark.asyncio
-async def test_safe_sync_reads_permission_attrs_from_existing_command():
-    """Regression: AppCommand.to_dict() in discord.py does NOT include
-    nsfw, dm_permission, or default_member_permissions — they live only
-    on the attributes. Without reading those attrs, any command with
-    non-default permissions false-diffs on every startup.
-    """
+async def test_safe_sync_reads_permissions_from_raw_command():
+    """Non-default permissions in the raw registry must not cause startup churn."""
     adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
 
     class _DesiredCommand:
@@ -745,21 +705,13 @@ async def test_safe_sync_reads_permission_attrs_from_existing_command():
         "dm_permission": False,
         "default_member_permissions": "8",
     }
-    # Existing command has matching attrs — should report unchanged, NOT falsely diff.
-    existing = _ExistingCommand(
-        42,
-        "admin",
-        "Admin-only command",
-        nsfw=True,
-        guild_only=True,
-        default_permissions=8,
-    )
+    existing = {"id": 42, **desired, "default_member_permissions": 8}
 
     fake_tree = SimpleNamespace(
         get_commands=lambda: [_DesiredCommand(desired)],
-        fetch_commands=AsyncMock(return_value=[existing]),
     )
     fake_http = SimpleNamespace(
+        get_global_commands=AsyncMock(return_value=[existing]),
         upsert_global_command=AsyncMock(),
         edit_global_command=AsyncMock(),
         delete_global_command=AsyncMock(),

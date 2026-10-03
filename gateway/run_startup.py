@@ -33,6 +33,11 @@ from gateway.shutdown_watchdog import (
 )
 from typing import Any, Dict, Optional, Tuple
 
+from gateway.run_profile_commands import (
+    hold_shared_command_sync,
+    release_shared_command_sync,
+)
+
 # Log-record parity with the origin module.
 logger = logging.getLogger("gateway.run")
 
@@ -1200,6 +1205,7 @@ class GatewayStartupMixin:
             # Under multiplexing the default profile needs the same whole-handler runtime scope as a
             # secondary (authorization and prompt rendering run before the agent-turn scope).
             self._wire_adapter_handlers(adapter)
+            hold_shared_command_sync(self, adapter)
             _pending_connects.append((platform, platform_config, adapter))
         return False, enabled_platform_count, _multiplex_skipped_platforms, _pending_connects
 
@@ -1345,6 +1351,7 @@ class GatewayStartupMixin:
         except Exception as e:
             logger.error("Secondary-profile adapter startup failed: %s", e, exc_info=True)
         finally:
+            release_shared_command_sync(self)
             # Startup authority is one phase: from here on every adapter retry is non-evicting.
             self._platform_lock_takeover_on_start = False
         # A platform skipped on the primary should have been picked up by a secondary owning the token;
@@ -1565,6 +1572,7 @@ class GatewayStartupMixin:
         try:
             return await self._start_impl()
         finally:
+            release_shared_command_sync(self)
             # Every startup path (early aborts included) ends here: bound startup on the latest
             # diagnostic snapshot once, instead of flushing at each return.
             await self._start_flush_runtime_status()

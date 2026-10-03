@@ -356,7 +356,11 @@ def read_claude_code_credentials() -> Optional[Dict[str, Any]]:
     This is the only reader of the borrowed login, so ``auth.adopt_external_logins: false`` is enforced here:
     every resolver, pool seed/sync and 401 refresher then sees "no Claude Code login" and never touches the file."""
     from agent.credential_sources import adopt_external_logins_enabled
-    if not adopt_external_logins_enabled():
+    from hermes_cli.auth import is_source_suppressed
+
+    if not adopt_external_logins_enabled() or is_source_suppressed(
+        "anthropic", "claude_code"
+    ):
         return None
     kc_creds = _read_claude_code_credentials_from_keychain()
     file_creds = _read_claude_code_credentials_from_file()
@@ -693,18 +697,35 @@ def resolve_anthropic_token(*, model: Optional[str] = None) -> Optional[str]:
 
     With *model*, a token the credential pool has benched for that model resolves to ``None``
     instead of being handed straight back to the caller that just saw it rate-limited."""
+    from agent.credential_sources import adopt_external_logins_enabled
+    from hermes_cli.auth import is_source_suppressed
+
+    use_claude_code = adopt_external_logins_enabled() and not is_source_suppressed(
+        "anthropic", "claude_code"
+    )
     _read_creds = functools.cache(read_claude_code_credentials)  # read the file at most once per resolve
     token = _first_env("ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")
     if token:
         return _available_anthropic_token(
-            _prefer_refreshable_claude_code_token(token, _read_creds()) or token, model,
+            (
+                _prefer_refreshable_claude_code_token(token, _read_creds())
+                if use_claude_code
+                else None
+            )
+            or token,
+            model,
         )
     api_key = _first_env("ANTHROPIC_API_KEY")  # an explicit API key must not be shadowed by discovered OAuth creds
     if api_key:
         return _available_anthropic_token(api_key, model)
     # The pool's claude_code row mirrors the same externally owned refresh grant.
     return _available_anthropic_token(
-        _resolve_anthropic_pool_token(skip_borrowed=True) or _resolve_claude_code_token_from_credentials(_read_creds()),
+        _resolve_anthropic_pool_token(skip_borrowed=True)
+        or (
+            _resolve_claude_code_token_from_credentials(_read_creds())
+            if use_claude_code
+            else None
+        ),
         model,
     )
 
