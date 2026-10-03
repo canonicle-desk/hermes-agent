@@ -346,12 +346,13 @@ def _add_nous_oauth_credential(args, provider: str) -> PooledCredential:
 
 
 def _unsuppress_provider_sources(provider: str) -> None:
-    """Clear ALL suppressions for this provider — re-adding a credential is a strong signal the
-    user wants auth re-enabled. Covers env:* (shell-exported vars), gh_cli (copilot), claude_code,
-    qwen-cli, device_code (codex), etc. — one consistent re-engagement pattern."""
+    """Re-enable the provider's sources, preserving an explicit Claude Code opt-out."""
     try:
         suppressed = auth_mod._load_auth_store().get("suppressed_sources", {})
         for src in list(suppressed.get(provider, []) or []):
+            # Adding Hermes OAuth must not reattach Claude Code's single-use grant.
+            if provider == "anthropic" and src == "claude_code":
+                continue
             auth_mod.unsuppress_credential_source(provider, src)
     except Exception:
         pass
