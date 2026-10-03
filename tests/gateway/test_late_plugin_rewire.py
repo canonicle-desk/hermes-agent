@@ -394,3 +394,153 @@ async def test_shared_discord_preserves_default_factory_and_reconnect(
             await asyncio.gather(*standalone.tasks)
     finally:
         reset_multiplex_context(token)
+
+
+@pytest.mark.asyncio
+async def test_shared_discord_primary_lifecycle_from_named_launch(
+    tmp_path, monkeypatch
+):
+    """#541: primary startup/reconnect must not adopt an unrouted launcher's factories."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from agent.secret_scope import reset_multiplex_context, set_multiplex_context
+    from gateway.run import GatewayRunner, load_gateway_config_for_runner
+    from hermes_cli.profiles import get_active_profile_name
+    from hermes_constants import get_hermes_home
+    from plugins.platforms.discord import adapter as discord_adapter
+
+    home = tmp_path / ".hermes"
+    reviewer = home / "profiles" / "reviewer"
+    launcher = home / "profiles" / "launcher"
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(launcher))
+    for profile_home in (home, reviewer, launcher):
+        _write_discord_plugin(profile_home)
+    for profile_home in (home, launcher):
+        config_path = profile_home / "config.yaml"
+        with config_path.open("a", encoding="utf-8") as stream:
+            stream.write("gateway:\n  multiplex_profiles: true\n")
+    with (home / "config.yaml").open("a", encoding="utf-8") as stream:
+        stream.write(
+            textwrap.dedent("""
+            platforms:
+              discord:
+                enabled: true
+                token: test-only
+                slash_commands: false
+            profile_routes:
+              - platform: discord
+                profile: reviewer
+                chat_id: '101'
+        """)
+        )
+
+    clients = []
+
+    class Client(_NativeDiscord):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.user = "test-bot"
+            self.guilds = []
+            self.closed = asyncio.Event()
+            clients.append(self)
+
+        def event(self, callback):
+            setattr(self, callback.__name__, callback)
+            return callback
+
+        async def start(self, token):
+            await self.on_ready()
+            await self.closed.wait()
+
+        async def close(self):
+            self.closed.set()
+
+        def is_closed(self):
+            return self.closed.is_set()
+
+    monkeypatch.setattr(discord_adapter.commands, "Bot", Client)
+    monkeypatch.setattr(discord_adapter.discord.opus, "is_loaded", lambda: True)
+
+    runner = GatewayRunner.__new__(GatewayRunner)
+    # The real boot loader discovers launch/default plugins and restores the launch scope.
+    runner.config = load_gateway_config_for_runner()
+    platform_config = runner.config.platforms[Platform.DISCORD]
+    runner._init_runtime_caches()
+    runner.adapters, runner._profile_adapters = {}, {}
+    runner._restart_requested = runner._draining = False
+    runner._shutdown_event = asyncio.Event()
+    runner.session_store = MagicMock()
+    runner.pairing_store, runner.pairing_stores = object(), {}
+    runner.delivery_router = SimpleNamespace(adapters=runner.adapters)
+    runner._busy_text_mode = "queue"
+    runner._voice_mode = {}
+    runner._update_platform_runtime_status = MagicMock()
+    runner._restore_secondary_completion_ledgers = MagicMock()
+    runner._schedule_planned_restart_replay = MagicMock()
+    runner._redeliver_failed_obligations_for_platform = AsyncMock()
+    runner._schedule_resume_pending_sessions = MagicMock()
+
+    token = set_multiplex_context(True)
+    try:
+        assert get_hermes_home() == launcher
+        assert get_active_profile_name() == "launcher"
+        assert runner._primary_profile_name == "default"
+
+        aborted, enabled, skipped, pending = await runner._start_prefilter_platforms()
+        assert not aborted and enabled == 1 and not skipped
+        # Discovery imports its own adapter module; patch the class production actually created.
+        # Only transport housekeeping is stubbed; connect/disconnect and handler wiring stay real.
+        adapter_class = type(pending[0][2])
+        monkeypatch.setattr(
+            adapter_class, "_run_post_connect_initialization", AsyncMock()
+        )
+        monkeypatch.setattr(adapter_class, "_start_liveness_probe", lambda self: None)
+        results = await runner._start_connect_pending(pending)
+        assert await runner._start_aggregate_connect_results(results, [], []) == 1
+        first = runner.adapters[Platform.DISCORD]
+        initial_bindings = list(clients[0].bindings)
+        assert await runner._start_secondary_profile_adapters() == 0
+        assert all(not adapters for adapters in runner._profile_adapters.values())
+        await asyncio.gather(*clients[0].tasks)
+
+        await first.disconnect()
+        runner.adapters.clear()
+        runner._failed_platforms[Platform.DISCORD] = {
+            "config": platform_config,
+            "attempts": 0,
+            "next_retry": 0,
+        }
+        await runner._reconnect_failed_platform(Platform.DISCORD, now=1)
+        rebuilt = runner.adapters[Platform.DISCORD]
+        assert rebuilt is not first
+        assert not runner._failed_platforms
+        assert len(clients) == 2 and clients[0].is_closed()
+        await asyncio.gather(*clients[1].tasks)
+
+        # Check both real connects together so the red run exposes startup AND reconnect identity.
+        assert [client.bindings for client in clients] == [
+            [(home, first), (reviewer, first)],
+            [(home, rebuilt), (reviewer, rebuilt)],
+        ], [
+            [bound_home.name for bound_home, _adapter in client.bindings]
+            for client in clients
+        ]
+        assert initial_bindings == [(home, first)]
+        assert all(
+            client.launches
+            == [
+                (home, "test-.hermes"),
+                (reviewer, "test-reviewer"),
+            ]
+            for client in clients
+        )
+        assert get_hermes_home() == launcher
+        assert get_active_profile_name() == "launcher"
+    finally:
+        for adapter in runner.adapters.values():
+            await adapter.disconnect()
+        for unsubscribe in (runner._plugin_rewire_unsubscribe or {}).values():
+            unsubscribe()
+        reset_multiplex_context(token)

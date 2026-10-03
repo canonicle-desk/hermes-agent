@@ -42,10 +42,20 @@ class PlatformPluginHandlersMixin:
         wired on this ``native`` (a force re-discovery hands back NEW function objects for the same
         plugin, so identity alone would double-register). Each factory is isolated so a bad plugin
         can't block connecting. Native callbacks retain their plugin-owned route guards and scopes."""
-        from hermes_constants import get_hermes_home
+        from hermes_constants import get_default_hermes_root, get_hermes_home
 
+        runner = getattr(self, "gateway_runner", None)
+        multiplex = getattr(
+            getattr(runner, "config", None), "multiplex_profiles", False
+        )
         if self._plugin_handler_home is None:
-            self._plugin_handler_home = get_hermes_home()
+            # Primary startup/reconnect can run in a named launcher's ambient scope.
+            # Its shared adapter still belongs to default; secondaries connect in their own scope.
+            self._plugin_handler_home = (
+                get_default_hermes_root()
+                if multiplex and not getattr(self, "_owner_profile", None)
+                else get_hermes_home()
+            )
         if (
             self._plugin_handler_native is not native
             or self._plugin_handlers_wired is None
@@ -53,8 +63,7 @@ class PlatformPluginHandlersMixin:
             # A rebuilt native client (transient-init rebuild, reconnect) starts with nothing wired.
             self._plugin_handler_native = native
             self._plugin_handlers_wired = set()
-        runner = getattr(self, "gateway_runner", None)
-        if not getattr(getattr(runner, "config", None), "multiplex_profiles", False):
+        if not multiplex:
             self._wire_profile_plugin_handlers(native)
             return
         from gateway.run import _profile_runtime_scope
