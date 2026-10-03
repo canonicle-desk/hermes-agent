@@ -50,31 +50,59 @@ class GatewayPluginRewireMixin:
 
         subs[scope] = manager.on_plugin_loaded(_on_loaded)
 
-    def _rewire_plugin_handlers(self, profile_name: Optional[str] = None,
-                                profile_home: Optional[Path] = None) -> int:
-        """Call ``rewire_plugin_handlers()`` on every live adapter of one profile (``None`` = the launch
-        profile's ``self.adapters``); a secondary's adapters read their own manager, so bind its scope.
+    def _rewire_plugin_handlers(
+        self, profile_name: Optional[str] = None, profile_home: Optional[Path] = None
+    ) -> int:
+        """Re-wire a profile's own adapters and the shared bots receiving its configured routes.
+        ``None`` includes the launch adapters and all routed bots (also used after served-set discovery).
         Returns the number of adapters re-wired."""
+        from gateway.platforms.base_plugin_handlers import routed_plugin_handler_homes
+
         if profile_name is None:
-            adapters = dict(getattr(self, "adapters", None) or {})
+            owned = getattr(self, "adapters", None) or {}
         else:
-            adapters = dict((getattr(self, "_profile_adapters", None) or {}).get(profile_name) or {})
+            owned = (getattr(self, "_profile_adapters", None) or {}).get(
+                profile_name
+            ) or {}
+        adapters = {id(adapter): (adapter, profile_home) for adapter in owned.values()}
+        registries = [
+            getattr(self, "adapters", None) or {},
+            *(getattr(self, "_profile_adapters", None) or {}).values(),
+        ]
+        for registry in registries:
+            for adapter in registry.values():
+                routed = routed_plugin_handler_homes(adapter)
+                if routed and (profile_name is None or profile_name in routed):
+                    # Extra adapter registries still belong to the receiving bot's profile.
+                    adapters.setdefault(
+                        id(adapter), (adapter, adapter._plugin_handler_home)
+                    )
         if not adapters:
             return 0
         from gateway.run import _profile_runtime_scope
-        scope = (_profile_runtime_scope(profile_home, hydrate_secrets=False)
-                 if profile_home is not None else contextlib.nullcontext())
+
         count = 0
-        with scope:
-            for platform, adapter in adapters.items():
-                try:
+        for adapter, home in adapters.values():
+            try:
+                scope = (
+                    _profile_runtime_scope(home, hydrate_secrets=False)
+                    if home is not None
+                    else contextlib.nullcontext()
+                )
+                with scope:
                     adapter.rewire_plugin_handlers()
-                    count += 1
-                except Exception:
-                    logger.warning("[%s] plugin handler re-wire failed", getattr(platform, "value", platform),
-                                   exc_info=True)
-        logger.info("Re-wired plugin handlers on %d adapter(s)%s", count,
-                    f" for profile '{profile_name}'" if profile_name else "")
+                count += 1
+            except Exception:
+                logger.warning(
+                    "[%s] plugin handler re-wire failed",
+                    adapter.platform,
+                    exc_info=True,
+                )
+        logger.info(
+            "Re-wired plugin handlers on %d adapter(s)%s",
+            count,
+            f" for profile '{profile_name}'" if profile_name else "",
+        )
         return count
 
 
