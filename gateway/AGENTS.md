@@ -210,6 +210,13 @@ gateway under the backend, and do NOT "fix" update locks by widening the tree-ki
   Resolve the owning home from the session record (`profile_home`, `agent:<profile>:` key), never
   from `os.environ`, which holds the launch profile. Why: eviction that flushed under the launch scope
   wrote a secondary profile's memories into the default profile's store, silently.
+- **Native platform handlers use plugin-owned route filtering and callback scope.** Under
+  `multiplex_profiles`, a routed profile factory can be wired onto the receiving bot's shared client.
+  Its callbacks receive all traffic from that bot and run in the receiving bot's scope. The plugin
+  must reject events when `adapter.build_source(...)` identifies another profile or a rejected route.
+  The plugin must re-enter `_profile_runtime_scope(home)` using the registration-time home before
+  profile-bound callback work. Listeners stay attached after a routed profile is unserved or parked
+  until the shared client reconnects.
 - **`api_server` rebuilds the agent per request but not the memory provider.** The adapter bypasses
   `TurnRunner` and the agent cache (per-request callbacks, model route, ephemeral prompt), so
   `platforms/api_server_memory_sessions.py` parks each session's initialised `MemoryManager` between

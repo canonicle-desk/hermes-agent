@@ -1540,6 +1540,13 @@ def register(ctx):
 - Import platform SDKs inside the factory body, not at module level — `register()` must work when the SDK isn't installed.
 - One plugin can register factories for several platforms; each fires only when its platform connects.
 
+**Multiplex profiles: plugin-owned route filtering and callback scope.** Under `multiplex_profiles`,
+a routed profile factory can be wired onto the receiving bot's shared client. Its callbacks receive
+all traffic from that bot and run in the receiving bot's scope. The plugin must reject events when
+`adapter.build_source(...)` identifies another profile or a rejected route. The plugin must re-enter
+`_profile_runtime_scope(home)` using the registration-time home before profile-bound callback work.
+Listeners stay attached after a routed profile is unserved or parked until the shared client reconnects.
+
 **Telegram alias:** `ctx.register_telegram_handler(factory)` is a back-compat alias for `ctx.register_platform_handler("telegram", factory)`.
 
 Example — Telegram, pattern-scoped inline buttons:
