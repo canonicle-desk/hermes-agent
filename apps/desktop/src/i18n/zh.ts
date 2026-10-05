@@ -2228,6 +2228,7 @@ export const zh = defineLocale({
         disabledTitle: '真实配置文件浏览：已关闭',
         disabledMessage: '配置文件快照将被删除；新会话使用干净的浏览器。',
         failedSave: '无法保存真实配置文件设置',
+        lockedDescription: ({ reason }) => `此主机已通过 ${reason} 锁定。代理不能在此使用你的浏览器配置文件；改用 Hermes 自有的无头浏览器。`,
         prompt: {
           title: '让网站保持登录状态',
           body: '让 Hermes 使用默认浏览器配置文件的快照进行浏览，网站打开时即已登录。',

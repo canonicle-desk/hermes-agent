@@ -87,6 +87,12 @@ async def get_config(profile: Optional[str] = None, include_defaults: bool = Tru
     config = await scoped_to_thread(
         profile, lambda: _normalize_config_for_web(load_config() if include_defaults else read_raw_config())
     )
+    # A locked key reads as its effective value: clients that echo the record back then write the
+    # value the host honors, and a stale ``true`` on disk is corrected by the next ordinary save.
+    if _config_locks()["browser.use_real_profile"]["locked"]:
+        browser = config.get("browser")
+        if isinstance(browser, dict):
+            browser["use_real_profile"] = False
     # Strip internal keys that the frontend shouldn't see or send back
     return {k: v for k, v in config.items() if not k.startswith("_")}
 
@@ -94,6 +100,31 @@ async def get_config(profile: Optional[str] = None, include_defaults: bool = Tru
 @config_router.get("/api/config/defaults")
 async def get_defaults():
     return DEFAULT_CONFIG
+
+
+def _config_locks() -> dict:
+    """Host-level vetoes over config keys. A locked key reads as off regardless of config.yaml, and
+    ``PUT /api/config`` refuses to write it on, so no client (Desktop consent prompt, settings
+    toggle, dashboard form) can persist a value the host does not honor."""
+    from tools.browser_tool_cloud import real_profile_lock
+    return {"browser.use_real_profile": real_profile_lock()}
+
+
+@config_router.get("/api/config/locks")
+async def get_config_locks():
+    return _config_locks()
+
+
+def _locked_write_detail(incoming: dict) -> Optional[str]:
+    """Reason text when ``incoming`` would turn on a locked key, else None."""
+    browser = incoming.get("browser") if isinstance(incoming, dict) else None
+    if not isinstance(browser, dict) or not browser.get("use_real_profile"):
+        return None
+    lock = _config_locks()["browser.use_real_profile"]
+    if not lock["locked"]:
+        return None
+    return (f"browser.use_real_profile is locked off on this host by {lock['reason']}; "
+            "agents may not use the user's own browser profile here.")
 
 
 @config_router.get("/api/config/schema")
@@ -130,6 +161,9 @@ async def update_config(
                 # would save the PUT body alone over the whole file.
                 existing = require_readable_config_before_write()
                 incoming = _denormalize_config_from_web(body.config)
+                locked_detail = _locked_write_detail(incoming)
+                if locked_detail:
+                    raise HTTPException(status_code=409, detail=locked_detail)
                 merged = _deep_merge(existing, incoming)
                 # Compare normalized approvals.mode across the in-memory
                 # documents, not config blocks and not cache re-reads: the page

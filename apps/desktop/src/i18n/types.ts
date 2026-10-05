@@ -2009,6 +2009,8 @@ export interface Translations {
         disabledTitle: string
         disabledMessage: string
         failedSave: string
+        /** Shown under the disabled toggle when a host veto holds the key off. */
+        lockedDescription: (params: { reason: string }) => string
         prompt: {
           title: string
           body: string

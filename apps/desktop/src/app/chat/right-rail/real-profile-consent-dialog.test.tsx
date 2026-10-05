@@ -15,6 +15,7 @@ import { RealProfileConsentDialog, shouldOfferRealProfilePrompt } from './real-p
 const mocks = vi.hoisted(() => ({
   cache: vi.fn(),
   loadedConfig: {} as Record<string, unknown> | undefined,
+  lock: { loaded: true, lock: { locked: false, reason: null as null | string } },
   notify: vi.fn(),
   notifyError: vi.fn(),
   save: vi.fn()
@@ -63,6 +64,11 @@ vi.mock('../../hooks/use-config-record', () => ({
   useHermesConfigRecord: () => ({ data: mocks.loadedConfig })
 }))
 
+vi.mock('../../hooks/use-config-lock', () => ({
+  REAL_PROFILE_LOCK_KEY: 'browser.use_real_profile',
+  useConfigLock: () => mocks.lock
+}))
+
 const localConnection = { mode: 'local' } as HermesConnection
 const remoteConnection = { mode: 'remote', remoteKind: 'ssh' } as HermesConnection
 
@@ -72,6 +78,8 @@ const openGate = {
   connection: localConnection,
   dismissed: false,
   enabled: false,
+  locked: false,
+  lockLoaded: true,
   muted: false,
   tabId: 'tab-1'
 }
@@ -101,11 +109,17 @@ describe('shouldOfferRealProfilePrompt', () => {
     expect(shouldOfferRealProfilePrompt({ ...openGate, muted: true })).toBe(false)
     expect(shouldOfferRealProfilePrompt({ ...openGate, claim: 'tab-2' })).toBe(false)
   })
+
+  it('never offers it under a host lock, and not before the lock is known', () => {
+    expect(shouldOfferRealProfilePrompt({ ...openGate, locked: true })).toBe(false)
+    expect(shouldOfferRealProfilePrompt({ ...openGate, lockLoaded: false })).toBe(false)
+  })
 })
 
 describe('RealProfileConsentDialog', () => {
   beforeEach(() => {
     mocks.loadedConfig = { browser: { allow_private_urls: false }, model: { provider: 'nous' } }
+    mocks.lock = { loaded: true, lock: { locked: false, reason: null } }
     mocks.save.mockResolvedValue({ ok: true })
     $realProfilePromptDismissed.set(false)
     $realProfilePromptMuted.set(false)
@@ -136,6 +150,21 @@ describe('RealProfileConsentDialog', () => {
       model: { provider: 'nous' }
     })
     expect(mocks.notify).toHaveBeenCalled()
+  })
+
+  it('renders nothing under a host lock, so nothing can write the key', () => {
+    mocks.lock = { loaded: true, lock: { locked: true, reason: 'HERMES_BROWSER_NO_REAL_PROFILE' } }
+    render(<RealProfileConsentDialog tabId="tab-1" />)
+
+    expect(screen.queryByText(promptCopy.title)).toBeNull()
+    expect(mocks.save).not.toHaveBeenCalled()
+  })
+
+  it('renders nothing until the lock state is known', () => {
+    mocks.lock = { loaded: false, lock: { locked: false, reason: null } }
+    render(<RealProfileConsentDialog tabId="tab-1" />)
+
+    expect(screen.queryByText(promptCopy.title)).toBeNull()
   })
 
   it('does not show when real-profile browsing is already on', () => {

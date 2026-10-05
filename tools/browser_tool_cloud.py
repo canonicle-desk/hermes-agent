@@ -252,6 +252,13 @@ def _real_profile_locked_off() -> bool:
     return os.environ.get(_REAL_PROFILE_LOCK_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def real_profile_lock() -> dict:
+    """The one description of the host veto every surface reads (config API, Desktop, CLI refusal):
+    ``{"locked": bool, "reason": "HERMES_BROWSER_NO_REAL_PROFILE" | None}``."""
+    locked = _real_profile_locked_off()
+    return {"locked": locked, "reason": _REAL_PROFILE_LOCK_ENV if locked else None}
+
+
 def _use_real_profile() -> bool:
     """Whether the user consented to real-profile local browsing.
 

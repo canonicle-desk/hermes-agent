@@ -1523,6 +1523,7 @@ export const zhHantSettings = {
         disabledTitle: '真實設定檔瀏覽：已關閉',
         disabledMessage: '設定檔快照將被刪除；新工作階段使用乾淨的瀏覽器。',
         failedSave: '無法儲存真實設定檔設定',
+        lockedDescription: ({ reason }) => `此主機已由 ${reason} 鎖定。代理程式不能在此使用你的瀏覽器設定檔；改用 Hermes 自有的無頭瀏覽器。`,
         prompt: {
           title: '讓網站保持登入狀態',
           body: '讓 Hermes 使用預設瀏覽器設定檔的快照進行瀏覽，網站開啟時即已登入。',

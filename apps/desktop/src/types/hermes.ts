@@ -22,6 +22,16 @@ export interface ConfigSchemaResponse {
   fields: Record<string, ConfigFieldSchema>
 }
 
+/** One host-level veto over a config key (`GET /api/config/locks`). */
+export interface ConfigLock {
+  locked: boolean
+  /** Environment variable that holds the key off, e.g. `HERMES_BROWSER_NO_REAL_PROFILE`; null when open. */
+  reason: null | string
+}
+
+/** Keyed by dotted config path, e.g. `browser.use_real_profile`. */
+export type ConfigLocksResponse = Record<string, ConfigLock>
+
 export interface AudioTranscriptionResponse {
   ok: boolean
   provider?: string

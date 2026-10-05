@@ -2739,6 +2739,7 @@ export const esOverrides = {
         disabledTitle: 'Navegación con perfil real desactivada',
         disabledMessage: 'Se eliminará la instantánea del perfil; las sesiones nuevas usan un navegador limpio.',
         failedSave: 'No se pudo guardar el ajuste del perfil real',
+        lockedDescription: ({ reason }) => `Bloqueado en este equipo por ${reason}. Los agentes no pueden usar tu perfil de navegador aquí; se usa el navegador sin interfaz propio de Hermes.`,
         prompt: {
           title: 'Mantén la sesión iniciada en tus sitios',
           body: 'Deja que Hermes navegue con una instantánea de tu perfil predeterminado del navegador, para que los sitios se abran con la sesión ya iniciada.',

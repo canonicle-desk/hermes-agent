@@ -7,6 +7,7 @@ import { BrowserRealProfilePanel } from './browser-real-profile-panel'
 const mocks = vi.hoisted(() => ({
   cache: vi.fn(),
   loadedConfig: {} as Record<string, unknown>,
+  lock: { loaded: true, lock: { locked: false, reason: null as null | string } },
   notify: vi.fn(),
   notifyError: vi.fn(),
   save: vi.fn()
@@ -28,7 +29,8 @@ vi.mock('@/i18n', () => ({
             enabledMessage: 'New sessions use the snapshot.',
             disabledTitle: 'Real-profile browsing off',
             disabledMessage: 'Snapshot will be deleted.',
-            failedSave: 'Could not save the real-profile setting'
+            failedSave: 'Could not save the real-profile setting',
+            lockedDescription: ({ reason }: { reason: string }) => `Locked off on this host by ${reason}.`
           }
         }
       }
@@ -46,9 +48,15 @@ vi.mock('../hooks/use-config-record', () => ({
   useHermesConfigRecord: () => ({ data: mocks.loadedConfig })
 }))
 
+vi.mock('../hooks/use-config-lock', () => ({
+  REAL_PROFILE_LOCK_KEY: 'browser.use_real_profile',
+  useConfigLock: () => mocks.lock
+}))
+
 describe('BrowserRealProfilePanel', () => {
   beforeEach(() => {
     mocks.loadedConfig = { browser: { allow_private_urls: false }, model: { provider: 'nous' } }
+    mocks.lock = { loaded: true, lock: { locked: false, reason: null } }
     mocks.save.mockResolvedValue({ ok: true })
   })
 
@@ -102,5 +110,22 @@ describe('BrowserRealProfilePanel', () => {
     // Last cache write restores the original record.
     expect(mocks.cache).toHaveBeenLastCalledWith(mocks.loadedConfig)
     expect(mocks.notifyError).toHaveBeenCalled()
+  })
+
+  it('renders off and disabled with the reason under a host lock, even when config.yaml says on', async () => {
+    mocks.lock = { loaded: true, lock: { locked: true, reason: 'HERMES_BROWSER_NO_REAL_PROFILE' } }
+    mocks.loadedConfig = { browser: { use_real_profile: true } }
+    render(<BrowserRealProfilePanel />)
+    const toggle = screen.getByRole('switch', { name: 'Use My Real Browser Profile' })
+
+    expect(toggle).toHaveProperty('ariaChecked', 'false')
+    expect(toggle).toHaveProperty('disabled', true)
+    expect(screen.getByText('Locked off on this host by HERMES_BROWSER_NO_REAL_PROFILE.')).toBeTruthy()
+
+    await act(async () => {
+      fireEvent.click(toggle)
+    })
+
+    expect(mocks.save).not.toHaveBeenCalled()
   })
 })
