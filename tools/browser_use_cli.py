@@ -536,7 +536,7 @@ def _route_backend(env: dict, session: str, task_id: Optional[str], local: bool)
         return rp_err
     # local=True is only served by the real-profile route; consent off must not pretend.
     if local and not _has_cdp_env(env) and not _real_profile_consented():
-        if os.environ.get("HERMES_BROWSER_NO_REAL_PROFILE", "").strip().lower() in ("1", "true", "yes", "on"):
+        if _lazy_call("tools.browser_tool_cloud", "_real_profile_locked_off", False, "real-profile lock lookup failed"):
             return ("local=true is disabled on this host (HERMES_BROWSER_NO_REAL_PROFILE is set): agents may not "
                     "use the user's own browser profile. Use the default Hermes-owned headless browser.")
         return ("local=true was requested but browser.use_real_profile is off. Enable it in config.yaml "

@@ -2748,6 +2748,7 @@ export const deOverrides = {
         disabledTitle: 'Echtes Profil-Browsen deaktiviert',
         disabledMessage: 'Der Profil-Schnappschuss wird gelöscht; neue Sessions verwenden einen sauberen Browser.',
         failedSave: 'Die Echtes-Profil-Einstellung konnte nicht gespeichert werden',
+        lockedDescription: ({ reason }) => `Auf diesem Rechner durch ${reason} gesperrt. Agenten dürfen hier nicht Ihr eigenes Browserprofil verwenden; stattdessen wird der Hermes-eigene Headless-Browser genutzt.`,
         prompt: {
           title: 'Auf Ihren Websites angemeldet bleiben',
           body: 'Lassen Sie Hermes mit einem Schnappschuss Ihres Standard-Browserprofils browsen, damit Websites bereits angemeldet öffnen.',

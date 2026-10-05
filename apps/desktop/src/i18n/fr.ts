@@ -2759,6 +2759,7 @@ export const frOverrides = {
         disabledMessage:
           "L'instantané du profil sera supprimé ; les nouvelles sessions utiliseront un navigateur vierge.",
         failedSave: "Impossible d'enregistrer le paramètre du profil réel",
+        lockedDescription: ({ reason }) => `Verrouillé sur cet hôte par ${reason}. Les agents ne peuvent pas utiliser votre profil de navigateur ici ; le navigateur headless de Hermes est utilisé à la place.`,
         prompt: {
           title: 'Restez connecté à vos sites',
           body: "Autorisez Hermes à naviguer avec un instantané de votre profil de navigateur par défaut afin que les sites s'ouvrent avec vos sessions déjà connectées.",

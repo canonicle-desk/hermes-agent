@@ -4,6 +4,7 @@ import { type ProfileScope, saveHermesConfigRecord } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { notify, notifyError } from '@/store/notifications'
 
+import { REAL_PROFILE_LOCK_KEY, useConfigLock } from '../hooks/use-config-lock'
 import { hermesConfigCacheWriter, useHermesConfigRecord } from '../hooks/use-config-record'
 
 import { ToggleRow } from './primitives'
@@ -38,15 +39,21 @@ export function readUseRealProfile(record: Record<string, unknown> | undefined):
  * turning it OFF deletes the snapshot store on next use. The toggle writes
  * config.yaml through the same deep-merging PUT /api/config every other
  * settings surface uses — applies to new sessions.
+ *
+ * A host veto (`HERMES_BROWSER_NO_REAL_PROFILE`, reported by
+ * `GET /api/config/locks`) renders the row off and disabled with the reason:
+ * the backend reads the key as off and refuses to write it on, so offering
+ * the switch would only produce a failed save.
  */
 export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProps) {
   const { t } = useI18n()
   const copy = t.settings.toolsets.browserRealProfile
   const { data: config, writeScope } = useHermesConfigRecord(profile)
+  const { lock } = useConfigLock(REAL_PROFILE_LOCK_KEY, profile)
   const setConfig = hermesConfigCacheWriter(profile)
   const [busy, setBusy] = useState(false)
 
-  const enabled = readUseRealProfile(config)
+  const enabled = !lock.locked && readUseRealProfile(config)
 
   const toggle = useCallback(
     async (on: boolean) => {
@@ -87,8 +94,8 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
   return (
     <ToggleRow
       checked={enabled}
-      description={copy.description}
-      disabled={busy || !config}
+      description={lock.locked ? copy.lockedDescription({ reason: lock.reason ?? '' }) : copy.description}
+      disabled={busy || !config || lock.locked}
       label={copy.label}
       onChange={on => void toggle(on)}
     />

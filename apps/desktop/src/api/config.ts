@@ -1,4 +1,5 @@
 import type {
+  ConfigLocksResponse,
   ConfigSchemaResponse,
   CustomEndpointsResponse,
   CustomEndpointUpdate,
@@ -166,6 +167,16 @@ export function getHermesConfigDefaults(): Promise<HermesConfigRecord> {
   return fetchBoundConfigRecord(undefined, {
     path: '/api/config/defaults',
     timeoutMs: STARTUP_REQUEST_TIMEOUT_MS
+  })
+}
+
+/** Host-level vetoes over config keys (`GET /api/config/locks`). A locked key reads as off
+ *  whatever config.yaml says and `PUT /api/config` refuses to write it on, so the Desktop must
+ *  not offer it. Absent on older backends: callers treat a failed fetch as "no locks". */
+export function getHermesConfigLocks(profile?: ProfileScope): Promise<ConfigLocksResponse> {
+  return hermesApi<ConfigLocksResponse>({
+    ...capabilityScoped(profile ?? undefined),
+    path: '/api/config/locks'
   })
 }
 

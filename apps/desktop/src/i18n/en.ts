@@ -2387,6 +2387,7 @@ export const en: Translations = {
         disabledTitle: 'Real-profile browsing off',
         disabledMessage: 'The profile snapshot will be deleted; new sessions use a clean browser.',
         failedSave: 'Could not save the real-profile setting',
+        lockedDescription: ({ reason }) => `Locked off on this host by ${reason}. Agents may not use your own browser profile here; the Hermes-owned headless browser is used instead.`,
         prompt: {
           title: 'Stay signed in to your sites',
           body: 'Let Hermes browse with a snapshot of your default browser profile, so sites open already signed in.',

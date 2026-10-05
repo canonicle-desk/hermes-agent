@@ -25,6 +25,7 @@ import {
 } from '@/store/real-profile-consent'
 import { $connection } from '@/store/session'
 
+import { REAL_PROFILE_LOCK_KEY, useConfigLock } from '../../hooks/use-config-lock'
 import { hermesConfigCacheWriter, useHermesConfigRecord } from '../../hooks/use-config-record'
 
 interface RealProfileConsentDialogProps {
@@ -39,6 +40,11 @@ interface RealProfilePromptGate {
   connection: HermesConnection | null
   dismissed: boolean
   enabled: boolean
+  /** Host veto (`HERMES_BROWSER_NO_REAL_PROFILE`): the backend reads the key as off and refuses
+   *  to write it on, so offering it is a defect, not a choice. */
+  locked: boolean
+  /** False until `GET /api/config/locks` answered (or failed): never flash the prompt before we know. */
+  lockLoaded: boolean
   muted: boolean
   tabId: string
 }
@@ -59,6 +65,8 @@ export function shouldOfferRealProfilePrompt(gate: RealProfilePromptGate): boole
   return (
     gate.connection?.mode === 'local' &&
     gate.configLoaded &&
+    gate.lockLoaded &&
+    !gate.locked &&
     !gate.enabled &&
     !gate.dismissed &&
     !gate.muted &&
@@ -88,6 +96,7 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
   const claim = useStore($realProfilePromptClaim)
   const connection = useStore($connection)
   const { data: config, writeScope } = useHermesConfigRecord()
+  const { loaded: lockLoaded, lock } = useConfigLock(REAL_PROFILE_LOCK_KEY)
   const setConfig = hermesConfigCacheWriter()
   const [busy, setBusy] = useState(false)
 
@@ -137,6 +146,8 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
     connection,
     dismissed,
     enabled,
+    locked: lock.locked,
+    lockLoaded,
     muted,
     tabId
   })
