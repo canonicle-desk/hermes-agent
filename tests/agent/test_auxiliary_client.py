@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -3260,6 +3261,242 @@ class TestCodexAdapterReasoningTranslation:
         )
         assert captured.get("reasoning") == {"effort": "medium", "summary": "auto"}
         assert captured.get("include") == ["reasoning.encrypted_content"]
+
+
+class TestCodexAdapterResponseFormat:
+    """The auxiliary schema reaches the SDK's final Responses body (#671)."""
+
+    @staticmethod
+    def _schema(strict: bool | None = True) -> dict[str, Any]:
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "scribe_rows",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "rows": {"type": "array", "items": {"type": "object"}}
+                    },
+                    "required": ["rows"],
+                    "additionalProperties": False,
+                },
+                "strict": strict,
+            },
+        }
+
+    @staticmethod
+    def _adapter(rejections=()):
+        import httpx
+        from openai import OpenAI
+
+        bodies = []
+
+        def respond(request):
+            body = json.loads(request.content)
+            bodies.append(body)
+            if len(bodies) <= len(rejections):
+                status, message = rejections[len(bodies) - 1]
+                return httpx.Response(
+                    status,
+                    json={
+                        "error": {
+                            "message": message,
+                            "type": "invalid_request_error",
+                            "param": "text.format",
+                        }
+                    },
+                )
+            item = {
+                "type": "message",
+                "id": "msg_test",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {"type": "output_text", "text": '{"rows": []}', "annotations": []}
+                ],
+            }
+            events = [
+                {"type": "response.output_item.done", "output_index": 0, "item": item},
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_test",
+                        "object": "response",
+                        "model": body["model"],
+                        "status": "completed",
+                        "output": [item],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2,
+                        },
+                    },
+                },
+            ]
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+            )
+
+        client = OpenAI(
+            api_key="dummy",
+            base_url="https://codex-format.example/v1",
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        )
+        return _CodexCompletionsAdapter(client, "gpt-6-luna"), bodies
+
+    @pytest.mark.parametrize("strict", [True, False, None])
+    def test_extra_body_json_schema_reaches_responses_wire(self, strict):
+        response_format = self._schema(strict)
+        if strict is None:
+            response_format["json_schema"].pop("strict")
+        adapter, bodies = self._adapter()
+        try:
+            adapter.create(
+                messages=[{"role": "user", "content": "Return JSON"}],
+                extra_body={
+                    "response_format": response_format,
+                    "reasoning": {"effort": "low"},
+                },
+            )
+        finally:
+            adapter._client.close()
+        assert bodies[0]["text"]["format"] == {
+            "type": "json_schema",
+            "name": "scribe_rows",
+            "schema": response_format["json_schema"]["schema"],
+            "strict": strict or False,
+        }
+        assert "response_format" not in bodies[0]
+        assert bodies[0]["reasoning"]["effort"] == "low"
+
+    def test_top_level_json_schema_reaches_responses_wire(self):
+        response_format = self._schema()
+        adapter, bodies = self._adapter()
+        try:
+            adapter.create(
+                messages=[{"role": "user", "content": "Return JSON"}],
+                response_format=response_format,
+            )
+        finally:
+            adapter._client.close()
+        assert bodies[0]["text"]["format"] == {
+            "type": "json_schema",
+            **response_format["json_schema"],
+        }
+        assert "response_format" not in bodies[0]
+
+    @pytest.mark.parametrize("format_type", ["json_schema", "json_object"])
+    def test_extra_body_response_format_wins(self, format_type):
+        winner: dict[str, Any] = (
+            self._schema(False)
+            if format_type == "json_schema"
+            else {"type": "json_object"}
+        )
+        expected = (
+            {"type": "json_schema", **winner["json_schema"]}
+            if format_type == "json_schema"
+            else winner
+        )
+        adapter, bodies = self._adapter()
+        try:
+            adapter.create(
+                messages=[{"role": "user", "content": "Return JSON"}],
+                response_format=self._schema(),
+                extra_body={"response_format": winner},
+            )
+        finally:
+            adapter._client.close()
+        assert bodies[0]["text"] == {"format": expected}
+        assert "response_format" not in bodies[0]
+
+    def test_no_response_format_adds_no_text(self):
+        adapter, bodies = self._adapter()
+        try:
+            adapter.create(messages=[{"role": "user", "content": "hi"}])
+        finally:
+            adapter._client.close()
+        assert "text" not in bodies[0]
+        assert "response_format" not in bodies[0]
+
+    @pytest.mark.parametrize("status", [400, 422])
+    @pytest.mark.parametrize(
+        "message, remembered",
+        [
+            ("Unsupported parameter: text.format", True),
+            ("Extra inputs are not permitted: text.format", True),
+            (
+                "Invalid schema for text.format 'json_schema': additionalProperties must be false",
+                False,
+            ),
+        ],
+    )
+    def test_text_format_rejection_strips_once_and_is_observable(
+        self, status, message, remembered
+    ):
+        from agent.auxiliary_client import _is_structured_output_rejection
+        from agent.auxiliary_fallback_recovery import send_with_parameter_rungs
+        from agent.auxiliary_structured_output import (
+            without_unsupported_response_format,
+        )
+        from openai import APIStatusError
+
+        adapter, bodies = self._adapter([(status, message)])
+        client = CodexAuxiliaryClient(adapter._client, "gpt-6-luna")
+        sent = []
+        errors = []
+        response_format = self._schema()
+        kwargs = {
+            "model": "gpt-6-luna",
+            "messages": [{"role": "user", "content": "Return JSON"}],
+            "response_format": self._schema(False),
+            "extra_body": {"response_format": response_format, "service_tier": "auto"},
+        }
+
+        def send(client, request_kwargs):
+            sent.append(request_kwargs)
+            try:
+                return client.chat.completions.create(**request_kwargs)
+            except APIStatusError as exc:
+                errors.append(exc)
+                raise
+
+        try:
+            response = send_with_parameter_rungs(send, client, kwargs, task="scribe")
+            assert response.choices[0].message.content == '{"rows": []}'
+            assert _is_structured_output_rejection(errors[0])
+            assert ["text" in body for body in bodies] == [True, False]
+            assert len(sent) == 2
+            assert (
+                "response_format" in sent[0]
+                and "response_format" in sent[0]["extra_body"]
+            )
+            assert (
+                "response_format" not in sent[1]
+                and "response_format" not in sent[1]["extra_body"]
+            )
+            assert sent[1]["extra_body"]["service_tier"] == "auto"
+            future = without_unsupported_response_format(
+                {"response_format": response_format},
+                "openai-codex",
+                str(adapter._client.base_url),
+                "gpt-6-luna",
+            )
+            assert ("response_format" not in future) is remembered
+        finally:
+            adapter._client.close()
+
+        # A second rejection after the strip propagates; no unchanged third attempt.
+        adapter, bodies = self._adapter([(status, message), (status, message)])
+        client = CodexAuxiliaryClient(adapter._client, "gpt-6-luna")
+        try:
+            with pytest.raises(APIStatusError):
+                send_with_parameter_rungs(send, client, kwargs, task="scribe")
+            assert ["text" in body for body in bodies] == [True, False]
+        finally:
+            adapter._client.close()
 
 
 class TestCodexAdapterPromptCacheKey:
