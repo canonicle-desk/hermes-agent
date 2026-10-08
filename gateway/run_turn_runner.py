@@ -1355,7 +1355,7 @@ class TurnRunner:
         reply: Dict[str, Any] = {"answers": answers, "outcome": "submitted"}
         last = len(questions) - 1
         for index, entry in enumerate(questions):
-            question = f"{entry['question']}\n{t('gateway.clarify.skip_hint')}"
+            question = entry["question"]  # no skip hint; "skip" still works when typed
             raw, answered = self._ask_clarify_question(
                 question, entry["choices"], bool(entry["multi_select"]), rearm=index == last)
             if raw == CANCELLED:

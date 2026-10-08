@@ -5537,10 +5537,10 @@ class DiscordAdapter(
             else:
                 hint = t("platform.discord.prompt.clarify_hint_text")
                 view = None
-            content = self._self_contained_prompt_content(
-                f"❓ **{clarify_title}**", str(question or "").strip(), tail=f"\n\n{hint}",
-            )
-            send_kwargs = {"content": content, "embed": embed}
+            # The question is the message. No title card, no header, no hint: the buttons say
+            # what to do, and a typed reply answers an open question (Will, 2026-10-08).
+            content = self._self_contained_prompt_content("", str(question or "").strip()).strip()
+            send_kwargs = {"content": content}
             if view:
                 send_kwargs["view"] = view
             return send_kwargs, view
@@ -6683,6 +6683,8 @@ def _define_discord_view_classes() -> None:
                 )
                 button.callback = self._make_choice_callback(index, choice)
                 self.add_item(button)
+            if any(c.strip().casefold() == "other" for c in self.choices):
+                return  # the caller's own Other button stands; no second one
             other_btn = discord.ui.Button(
                 label=_t_discord("platform.discord.prompt.other", _DISCORD_BUTTON_LABEL_LIMIT), style=discord.ButtonStyle.secondary,
                 custom_id=f"clarify:{clarify_id}:other",
@@ -6695,7 +6697,7 @@ def _define_discord_view_classes() -> None:
             """``"N. <choice>"`` within Discord's 80-char (UTF-16) label cap.
             Mobile wraps early, so long choices cut at a word boundary in the trailing half, else a
             soft boundary (``- , . )``, inclusive), else hard."""
-            prefix = f"{index + 1}. "
+            prefix = ""  # bare labels; a button needs no number (Will, 2026-10-08)
             budget = _DISCORD_BUTTON_LABEL_LIMIT - utf16_len(prefix)
             if utf16_len(choice) <= budget:
                 return f"{prefix}{choice}"
