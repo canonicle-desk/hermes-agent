@@ -78,7 +78,10 @@ def _normalize_questions(questions) -> tuple:
             choices = cleaned or None
         normalized.append({
             "qid": f"q{index}", "question": text,
-            "choices": mark_recommended(list(choices)) if choices else None,
+            # The label is a claim; only mark when the caller says it ranked the options.
+            "choices": (mark_recommended(list(choices)) if item.get("recommended") else list(choices))
+            if choices
+            else None,
             "choices_offered": list(choices) if choices else None,
             "multi_select": bool(item.get("multi_select")) and bool(choices)})
     return normalized, None
