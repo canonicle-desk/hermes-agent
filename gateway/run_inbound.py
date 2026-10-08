@@ -1137,6 +1137,11 @@ class GatewayInboundMixin:
                             result = await self._run_in_executor_with_context(plugin_handler, user_args)
                             if asyncio.iscoroutine(result):
                                 result = await result
+                    # A handler may hand the turn to the agent: {"fallthrough": "<text>"} rewrites
+                    # the event text and lets dispatch continue (skill-slash rewrite, then the agent).
+                    if isinstance(result, dict) and isinstance(result.get("fallthrough"), str):
+                        event.text = result["fallthrough"]
+                        return False, None, event.get_command()
                     return True, str(result) if result else None, command
             except Exception as e:
                 logger.warning("Plugin command dispatch failed: %s", e)
