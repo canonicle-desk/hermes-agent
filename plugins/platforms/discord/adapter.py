@@ -5527,7 +5527,11 @@ class DiscordAdapter(
                 title=_truncate_discord_component_text(f"❓ {clarify_title}", _DISCORD_EMBED_TITLE_LIMIT), color=discord.Color.orange())
             # 5 buttons × 5 rows = 25; one slot is reserved for "Other".
             clean_choices = [s for s in (_flatten_choice(c) for c in (choices or [])) if s][:24]
+            body = str(question or "").strip()
             if clean_choices:
+                body += "\n\n" + "\n".join(
+                    f"{i + 1}. {choice}" for i, choice in enumerate(clean_choices)
+                )
                 hint = t("platform.discord.prompt.clarify_hint_buttons")
                 view = ClarifyChoiceView(
                     choices=clean_choices, clarify_id=clarify_id,
@@ -5538,7 +5542,7 @@ class DiscordAdapter(
                 hint = t("platform.discord.prompt.clarify_hint_text")
                 view = None
             content = self._self_contained_prompt_content(
-                f"❓ **{clarify_title}**", str(question or "").strip(), tail=f"\n\n{hint}",
+                f"❓ **{clarify_title}**", body, tail=f"\n\n{hint}",
             )
             send_kwargs = {"content": content, "embed": embed}
             if view:

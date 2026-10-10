@@ -234,6 +234,40 @@ class TestDiscordSendClarify:
         assert len(kwargs["view"].children) == 4
 
     @pytest.mark.asyncio
+    async def test_long_choices_in_content_keep_capped_buttons(self):
+        adapter = _make_adapter(allowed_users={"42"})
+        channel = MagicMock()
+        channel.send = AsyncMock(return_value=SimpleNamespace(id=123456))
+        adapter._client.get_channel = MagicMock(return_value=channel)
+        choices = [char * 120 for char in "abc"]
+        question = "Which option should I use?"
+
+        result = await adapter.send_clarify(
+            chat_id="9001",
+            question=question,
+            choices=choices,
+            clarify_id="cidLong",
+            session_key="sk-Long",
+        )
+
+        assert result.success is True
+        kwargs = channel.send.call_args.kwargs
+        numbered_choices = "\n".join(
+            f"{index}. {choice}" for index, choice in enumerate(choices, 1)
+        )
+        assert f"{question}\n\n{numbered_choices}\n\n" in kwargs["content"]
+        view = kwargs["view"]
+        assert view.choices == choices
+        assert len(view.children) == len(choices) + 1
+        for index, button in enumerate(view.children[:-1], 1):
+            assert button.label.startswith(f"{index}. ")
+            assert button.label.endswith("\u2026")
+            assert utf16_len(button.label) == 80
+            assert button.custom_id == f"clarify:cidLong:{index - 1}"
+        assert view.children[-1].custom_id == "clarify:cidLong:other"
+        assert "Other" in view.children[-1].label
+
+    @pytest.mark.asyncio
     async def test_open_ended_omits_view(self):
         adapter = _make_adapter()
         channel = MagicMock()
